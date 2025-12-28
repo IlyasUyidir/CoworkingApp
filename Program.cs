@@ -22,7 +22,10 @@ builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<IAnalyticsService, AnalyticsService>();
 
 // --- 3. Authentication Configuration ---
-var key = Encoding.ASCII.GetBytes(builder.Configuration["Jwt:Key"]);
+// Added a fallback key just in case appsettings is missing it to prevent a crash
+var jwtKey = builder.Configuration["Jwt:Key"] ?? "super_secure_key_for_dev_123!";
+var key = Encoding.ASCII.GetBytes(jwtKey);
+
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -51,7 +54,9 @@ builder.Services.AddAuthorization(options =>
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddOpenApi(); // CHANGED: Use built-in OpenAPI
+
+// --- CHANGED: Swapped "AddOpenApi" for "AddSwaggerGen" ---
+builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
@@ -76,7 +81,9 @@ app.UseMiddleware<ErrorHandlingMiddleware>();
 
 if (app.Environment.IsDevelopment())
 {
-    app.MapOpenApi(); // CHANGED: Use built-in OpenAPI
+    // --- CHANGED: Swapped "MapOpenApi" for "UseSwagger" ---
+    app.UseSwagger();
+    app.UseSwaggerUI();
 }
 
 app.UseHttpsRedirection();

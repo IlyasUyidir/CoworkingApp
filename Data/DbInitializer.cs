@@ -23,7 +23,7 @@ namespace CoworkingApp.API.Data
             {
                 UserId = Guid.NewGuid(),
                 Email = "admin@coworking.com",
-                Password = BCrypt.Net.BCrypt.HashPassword("Admin123!"), // Default Password
+                Password = BCrypt.Net.BCrypt.HashPassword("Admin123!"),
                 FirstName = "System",
                 LastName = "Admin",
                 PhoneNumber = "1234567890",
@@ -52,6 +52,7 @@ namespace CoworkingApp.API.Data
 
             context.Members.Add(member);
             
+            // 3. Create Location and Amenities
             if (!context.Locations.Any())
             {
                 var location = new Location
@@ -62,18 +63,40 @@ namespace CoworkingApp.API.Data
                     City = "Tech City",
                     Country = "Innovation Land",
                     PostalCode = "90210",
-                    OpeningHours = "08:00 - 22:00"
+                    OpeningHours = "08:00 - 22:00",
+                    Coordinates = "40.7128° N, 74.0060° W", // <--- ADDED THIS
+                    Facilities = "Parking, Gym, Lounge"     // Added just in case
                 };
                 context.Locations.Add(location);
 
-                var wifi = new Amenity { AmenityId = Guid.NewGuid(), Name = "High-Speed WiFi", Icon = "wifi" };
-                var coffee = new Amenity { AmenityId = Guid.NewGuid(), Name = "Free Coffee", Icon = "coffee" };
-                var printer = new Amenity { AmenityId = Guid.NewGuid(), Name = "Printing Services", Icon = "print" };
+                var wifi = new Amenity 
+                { 
+                    AmenityId = Guid.NewGuid(), 
+                    Name = "High-Speed WiFi", 
+                    Icon = "wifi",
+                    Description = "Fiber optic internet connection 1Gbps" // <--- ADDED THIS
+                };
+                
+                var coffee = new Amenity 
+                { 
+                    AmenityId = Guid.NewGuid(), 
+                    Name = "Free Coffee", 
+                    Icon = "coffee",
+                    Description = "Unlimited premium roasted coffee" // <--- ADDED THIS
+                };
+                
+                var printer = new Amenity 
+                { 
+                    AmenityId = Guid.NewGuid(), 
+                    Name = "Printing Services", 
+                    Icon = "print",
+                    Description = "Color and BW laser printing included" // <--- ADDED THIS
+                };
         
                 context.Amenities.AddRange(wifi, coffee, printer);
             }
 
             context.SaveChanges();
-        } // <-- THIS CLOSING BRACE WAS MISSING
+        }
     }
 }
