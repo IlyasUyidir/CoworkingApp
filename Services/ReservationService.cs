@@ -14,48 +14,60 @@ namespace CoworkingApp.API.Services
     public class ReservationService : IReservationService
     {
         private readonly CoworkingContext _context;
+        private readonly INotificationService _notificationService; //
 
-        public ReservationService(CoworkingContext context)
+        public ReservationService(CoworkingContext context, INotificationService notificationService)
         {
             _context = context;
+            _notificationService = notificationService;
         }
-
-        // ... Keep existing Create, Get, Cancel methods here ...
 
         public async Task<ReservationResponse> CreateReservationAsync(Guid memberId, CreateReservationRequest request)
         {
-            // (Paste previous Create implementation here)
-            var space = await _context.Spaces.FindAsync(request.SpaceId);
-            if (space == null) throw new Exception("Space not found.");
-
-            var hasConflict = await _context.Reservations
-                .AnyAsync(r => r.SpaceId == request.SpaceId 
-                            && r.Status != ReservationStatus.CANCELLED
-                            && r.StartDateTime < request.EndDateTime 
-                            && r.EndDateTime > request.StartDateTime);
-
-            if (hasConflict) throw new Exception("Space is not available.");
-
-            var duration = request.EndDateTime - request.StartDateTime;
-            var hours = (decimal)duration.TotalHours;
-            var totalPrice = Math.Round(space.PricePerHour * hours, 2);
-
-            var reservation = new Reservation
+            // Fix: Use Transaction to prevent Race Conditions (Double Booking)
+            using var transaction = await _context.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+            try
             {
-                ReservationId = Guid.NewGuid(),
-                SpaceId = request.SpaceId,
-                MemberId = memberId,
-                StartDateTime = request.StartDateTime,
-                EndDateTime = request.EndDateTime,
-                Status = ReservationStatus.PENDING,
-                TotalPrice = totalPrice,
-                CreatedAt = DateTime.UtcNow
-            };
+                var space = await _context.Spaces.FindAsync(request.SpaceId);
+                if (space == null) throw new Exception("Space not found.");
 
-            _context.Reservations.Add(reservation);
-            await _context.SaveChangesAsync();
+                // Concurrency Check
+                var hasConflict = await _context.Reservations
+                    .AnyAsync(r => r.SpaceId == request.SpaceId 
+                                && r.Status != ReservationStatus.CANCELLED
+                                && r.StartDateTime < request.EndDateTime 
+                                && r.EndDateTime > request.StartDateTime);
 
-            return MapToResponse(reservation, space.Name);
+                if (hasConflict) throw new Exception("Space is not available for the selected dates.");
+
+                var duration = request.EndDateTime - request.StartDateTime;
+                var hours = (decimal)duration.TotalHours;
+                var totalPrice = Math.Round(space.PricePerHour * hours, 2);
+
+                var reservation = new Reservation
+                {
+                    ReservationId = Guid.NewGuid(),
+                    SpaceId = request.SpaceId,
+                    MemberId = memberId,
+                    StartDateTime = request.StartDateTime,
+                    EndDateTime = request.EndDateTime,
+                    Status = ReservationStatus.PENDING,
+                    TotalPrice = totalPrice,
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                _context.Reservations.Add(reservation);
+                await _context.SaveChangesAsync();
+                
+                await transaction.CommitAsync();
+
+                return MapToResponse(reservation, space.Name);
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
         }
 
         public async Task<List<ReservationResponse>> GetMemberReservationsAsync(Guid memberId)
@@ -72,12 +84,30 @@ namespace CoworkingApp.API.Services
 
         public async Task<bool> CancelReservationAsync(Guid reservationId, Guid memberId)
         {
-            var reservation = await _context.Reservations.FindAsync(reservationId);
+            var reservation = await _context.Reservations
+                .Include(r => r.Space)
+                .Include(r => r.Member)
+                .Include(r => r.Payment)
+                .FirstOrDefaultAsync(r => r.ReservationId == reservationId);
+
             if (reservation == null) throw new Exception("Reservation not found.");
             if (reservation.MemberId != memberId) throw new Exception("Unauthorized.");
+            if (reservation.Status == ReservationStatus.CANCELLED) throw new Exception("Already cancelled.");
             
+            // Logic: Handle Refund if previously CONFIRMED (Paid)
+            if (reservation.Status == ReservationStatus.CONFIRMED && reservation.Payment != null)
+            {
+                // In a real app, call PaymentGateway.Refund(payment.TransactionId)
+                reservation.Payment.Status = PaymentStatus.REFUNDED;
+                Console.WriteLine($"[REFUND INITIATED] Refund of {reservation.Payment.Amount} for Transaction {reservation.Payment.TransactionId}");
+            }
+
             reservation.Status = ReservationStatus.CANCELLED;
             await _context.SaveChangesAsync();
+
+            // Connected Logic: Send Notification
+            await _notificationService.SendCancellationNoticeAsync(reservation.Member, reservation);
+
             return true;
         }
 
@@ -92,8 +122,6 @@ namespace CoworkingApp.API.Services
              return MapToResponse(reservation, reservation.Space.Name);
         }
 
-        // --- NEW CHECK-IN / CHECK-OUT LOGIC ---
-
         public async Task<bool> CheckInAsync(Guid reservationId)
         {
             var reservation = await _context.Reservations
@@ -102,22 +130,19 @@ namespace CoworkingApp.API.Services
 
             if (reservation == null) throw new Exception("Reservation not found.");
 
-            // Validation: Must be CONFIRMED (paid) and within valid time window
             if (reservation.Status != ReservationStatus.CONFIRMED)
                 throw new Exception("Reservation must be confirmed (paid) before check-in.");
 
             var now = DateTime.UtcNow;
+            // Relaxed check-in window for testing (remove +/- 15 min constraints if needed)
             if (now < reservation.StartDateTime.AddMinutes(-15))
                 throw new Exception("Too early to check in.");
             
             if (now > reservation.EndDateTime)
                 throw new Exception("Reservation has expired.");
 
-            // Update Logic
             reservation.Status = ReservationStatus.CHECKED_IN;
             reservation.CheckInTime = now;
-            
-            // Mark Space as Occupied
             reservation.Space.Status = SpaceStatus.OCCUPIED;
 
             await _context.SaveChangesAsync();
@@ -134,11 +159,8 @@ namespace CoworkingApp.API.Services
             if (reservation.Status != ReservationStatus.CHECKED_IN)
                 throw new Exception("Reservation is not currently checked in.");
 
-            // Update Logic
             reservation.Status = ReservationStatus.COMPLETED;
             reservation.CheckOutTime = DateTime.UtcNow;
-
-            // Free up the Space
             reservation.Space.Status = SpaceStatus.AVAILABLE;
 
             await _context.SaveChangesAsync();

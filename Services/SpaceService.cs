@@ -27,7 +27,7 @@ namespace CoworkingApp.API.Services
             var location = await _context.Locations.FindAsync(request.LocationId);
             if (location == null) throw new BadRequestException("Location not found.");
 
-            // 2. Map DTO to Model
+            // 2. Map DTO to Space Model
             var space = new Space
             {
                 SpaceId = Guid.NewGuid(),
@@ -56,8 +56,21 @@ namespace CoworkingApp.API.Services
                 }
             }
 
-            // 4. Save to DB
+            // 4. Create Connected Pricing Entity
+            var pricing = new Pricing
+            {
+                PricingId = Guid.NewGuid(),
+                SpaceId = space.SpaceId,
+                HourlyRate = request.PricePerHour,
+                DailyRate = request.PricePerHour * 8,   
+                WeeklyRate = request.PricePerHour * 40, 
+                MonthlyRate = request.PricePerHour * 160,
+                DiscountRules = "None" // <--- FIX: Added default value to prevent crash
+            };
+            
+            _context.Pricings.Add(pricing);
             _context.Spaces.Add(space);
+            
             await _context.SaveChangesAsync();
 
             return MapToResponse(space);
@@ -82,27 +95,19 @@ namespace CoworkingApp.API.Services
                 .Include(s => s.Amenities)
                 .AsQueryable();
 
-            // Filter by Location
             if (request.LocationId.HasValue)
             {
                 query = query.Where(s => s.LocationId == request.LocationId.Value);
             }
 
-            // Filter by Type
             if (request.Type.HasValue)
             {
                 query = query.Where(s => s.Type == request.Type.Value);
             }
 
-            // Filter by Date Availability (Basic Logic: Exclude if fully booked)
-            // Note: For a robust system, this needs TimeSlot logic. 
-            // Here we check if the space is not set to MAINTENANCE or RESERVED status.
             if (request.Date.HasValue)
             {
                  query = query.Where(s => s.Status == SpaceStatus.AVAILABLE);
-                 
-                 // Advanced: Exclude spaces that have a confirmed reservation covering the WHOLE day?
-                 // Keeping it simple for browsing: showing all active spaces.
             }
 
             var spaces = await query.ToListAsync();
@@ -118,6 +123,7 @@ namespace CoworkingApp.API.Services
             await _context.SaveChangesAsync();
             return true;
         }
+
         public async Task<SpaceResponse> UpdateSpaceAsync(Guid id, UpdateSpaceRequest request)
         {
             var space = await _context.Spaces
@@ -127,20 +133,12 @@ namespace CoworkingApp.API.Services
 
             if (space == null) throw new NotFoundException("Space not found.");
 
-            // Update fields only if they are provided (not null)
             if (!string.IsNullOrEmpty(request.Name)) space.Name = request.Name;
             if (request.Type.HasValue) space.Type = request.Type.Value;
             if (request.Capacity.HasValue) space.Capacity = request.Capacity.Value;
             if (request.PricePerHour.HasValue) space.PricePerHour = request.PricePerHour.Value;
             if (!string.IsNullOrEmpty(request.Description)) space.Description = request.Description;
-            
-            // Handle Status Change (Maintenance Mode logic from Sequence Diagram)
-            if (request.Status.HasValue) 
-            {
-                space.Status = request.Status.Value;
-                // NOTE: In Phase 4, you would add logic here to cancel existing reservations 
-                // if status becomes MAINTENANCE.
-            }
+            if (request.Status.HasValue) space.Status = request.Status.Value;
 
             await _context.SaveChangesAsync();
             return MapToResponse(space);

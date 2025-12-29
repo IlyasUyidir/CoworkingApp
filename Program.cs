@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models; // <--- ADDED THIS NAMESPACE
 using System.Text;
 using CoworkingApp.API.Data;
 using CoworkingApp.API.Interfaces;
@@ -22,7 +23,6 @@ builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<IAnalyticsService, AnalyticsService>();
 
 // --- 3. Authentication Configuration ---
-// Added a fallback key just in case appsettings is missing it to prevent a crash
 var jwtKey = builder.Configuration["Jwt:Key"] ?? "super_secure_key_for_dev_123!";
 var key = Encoding.ASCII.GetBytes(jwtKey);
 
@@ -55,8 +55,39 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
-// --- CHANGED: Swapped "AddOpenApi" for "AddSwaggerGen" ---
-builder.Services.AddSwaggerGen();
+// --- CHANGED: Configure Swagger to show the "Authorize" button ---
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "CoworkingApp.API", Version = "v1" });
+
+    // Define the Security Scheme (JWT Bearer)
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "JWT Authorization header using the Bearer scheme. \r\n\r\n Enter 'Bearer' [space] and then your token in the text input below.\r\n\r\nExample: \"Bearer 12345abcdef\"",
+        Name = "Authorization",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.ApiKey,
+        Scheme = "Bearer"
+    });
+
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement()
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                },
+                Scheme = "oauth2",
+                Name = "Bearer",
+                In = ParameterLocation.Header,
+            },
+            new List<string>()
+        }
+    });
+});
 
 var app = builder.Build();
 
@@ -67,7 +98,7 @@ using (var scope = app.Services.CreateScope())
     try
     {
         var context = services.GetRequiredService<CoworkingContext>();
-        DbInitializer.Initialize(context); // Seeds Admin and Member
+        DbInitializer.Initialize(context); 
     }
     catch (Exception ex)
     {
@@ -81,7 +112,6 @@ app.UseMiddleware<ErrorHandlingMiddleware>();
 
 if (app.Environment.IsDevelopment())
 {
-    // --- CHANGED: Swapped "MapOpenApi" for "UseSwagger" ---
     app.UseSwagger();
     app.UseSwaggerUI();
 }
